@@ -1,66 +1,87 @@
-from amazon import *
-from flipkart import *
-import sys
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from amazon import amazon, AmazonProductNotFound
+from flipkart import flipkart
+from utils.urls import canonical_amazon_url_from, expand_url_follow_redirects
+import requests
+import logging
 
-def main(*args):
-    if args:
-        response = args[0]
-    else:
-        response = input("Enter the product name or URL: ")
-    if "http" in response:
-        url = response
-        if "amazon" in url:
-            product_amazon = amazon(url)
-            product_amazon.print_product_info()
+logger = logging.getLogger("startup")
 
-            print("Would you like to search for the product automatically on Flipkart?")
-            print("Press 'y' to continue. Or Enter the Flipkart URL")
-            response = input("> ")
+app = FastAPI()
 
-            if response == "y" or response == "Y":
+@app.on_event("startup")
+def check_playwright():
+    # Solo log informativo: Chromium debe instalarse en build con
+    # `playwright install chromium`
+    logger.info("✅ API iniciada. Asegúrate de que Chromium está instalado en el build (playwright install chromium).")
+
+
+class ProductRequest(BaseModel):
+    url: str
+    compare_platform: bool = False  # si True, también buscamos en la otra plataforma
+
+
+@app.post("/get_price")
+def get_price_endpoint(request: ProductRequest):
+    url = request.url
+
+    # expandir short URL
+    try:
+        final = expand_url_follow_redirects(url)
+    except requests.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Error al expandir la URL: {e}")
+
+    result = {}
+
+    try:
+        if "amazon" in final:
+            canonical = canonical_amazon_url_from(final)
+            product_amazon = amazon(canonical)
+            result["Amazon"] = {
+                "name": product_amazon.name,
+                "price": product_amazon.price,
+                "currency": "EUR"
+            }
+
+            if request.compare_platform:
+                # Buscar en Flipkart automáticamente
                 flipkart_link = flipkart.search_item(product_amazon.name)
-                if (flipkart_link == "exit"):
-                    sys.exit("Exiting...")
-            else:
-                flipkart_link = response
-            
-            product_flipkart = flipkart(flipkart_link)
-            product_flipkart.print_product_info()
+                if flipkart_link != "exit":
+                    product_flipkart = flipkart(flipkart_link)
+                    result["Flipkart"] = {
+                        "name": product_flipkart.name,
+                        "price": product_flipkart.price,
+                        "currency": "INR"
+                    }
 
+        elif "flipkart" in final:
+            product_flipkart = flipkart(final)
+            result["Flipkart"] = {
+                "name": product_flipkart.name,
+                "price": product_flipkart.price,
+                "currency": "INR"
+            }
 
-        elif "flipkart" in url:
-            product_flipkart = flipkart(url)
-            product_flipkart.print_product_info()
-
-            print("Would you like to search for the product automatically on Amazon?")
-            print("Press 'y' to continue. Or Enter the Amazon URL")
-            response = input("> ")
-
-            if response == "y" or response == "Y":
+            if request.compare_platform:
+                # Buscar en Amazon automáticamente
                 amazon_link = amazon.search_item(product_flipkart.name)
-                if (amazon_link == "exit"):
-                    sys.exit("Exiting...")
-            else:
-                amazon_link = response
-
-            product_amazon = amazon(amazon_link)
-            product_amazon.print_product_info()
-            
-        else:
-            print("Website Not Supported")
-    else:
-        print("Where would you like to search the product? Amazon or Flipkart? ")
-        platform = input("> ")
-        if platform == "amazon" or platform == "Amazon":
-            main(amazon.search_item(response))
-
-        elif platform == "flipkart" or platform == "Flipkart":
-            main(flipkart.search_item(response))
+                if amazon_link != "exit":
+                    product_amazon = amazon(amazon_link)
+                    result["Amazon"] = {
+                        "name": product_amazon.name,
+                        "price": product_amazon.price,
+                        "currency": "EUR"
+                    }
 
         else:
-            sys.exit("Platform not supported.")
-    return 0
+            raise HTTPException(status_code=400, detail="Solo se admiten URLs de Amazon o Flipkart")
 
-if __name__ == '__main__':
-    main()
+        return result
 
+    except AmazonProductNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except requests.RequestException as e:
+        raise HTTPException(status_code=503, detail=f"Error de red: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error inesperado: {e}")
