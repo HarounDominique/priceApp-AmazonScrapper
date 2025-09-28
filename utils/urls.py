@@ -76,33 +76,23 @@ def extract_asin(url: str) -> str | None:
 
 
 def canonical_amazon_url_from(final_url: str) -> str:
-    """
-    Dada una URL final (resuelta), construye una URL canónica tipo https://www.amazon.<tld>/dp/ASIN.
-    Si no encuentra ASIN, devuelve la final_url sin cambiar.
-    """
     asin = extract_asin(final_url)
     if not asin:
         return final_url
 
-    # intentar sacar el TLD/región del host (ej: amazon.es -> amazon.es)
     parsed = urlparse(final_url)
     host = parsed.netloc.lower()
-    # priorizamos amazon.* host en la final_url; si no se detecta amazon, default a amazon.es
     tld = "amazon.es"
-    if "amazon." in host:
-        # tomamos la parte 'amazon.xx' o 'amazon.co.uk'
-        # buscamos "amazon." y extraemos lo que viene hasta la primera /
-        # simplificamos: host puede ser 'www.amazon.es' -> usamos last two components
-        parts = host.split(".")
-        # construir 'amazon.xx' o 'amazon.co.uk' (hasta 3 partes)
-        if len(parts) >= 2:
-            # tomar las últimas 2 o 3 partes si el penúltimo es 'co' -> 'co.uk'
-            if parts[-2] == "co" and len(parts) >= 3:
-                tld = "amazon." + parts[-2] + "." + parts[-1]  # amazon.co.uk
-            else:
-                tld = "amazon." + parts[-1]  # amazon.es, amazon.com, amazon.in, etc.
-    else:
-        # si no aparece amazon en host, quizá redireccionó a amazon vía path; por seguridad fallback amazon.es
-        tld = "amazon.es"
 
+    if "amazon." in host:
+        parts = host.split(".")
+        if parts[-2] == "co" and len(parts) >= 3:
+            tld = "amazon." + parts[-2] + "." + parts[-1]
+        else:
+            tld = "amazon." + parts[-1]
+
+    # conservamos query params críticos (si existen)
+    query = parsed.query
+    if query:
+        return f"https://www.{tld}/dp/{asin}?{query}"
     return f"https://www.{tld}/dp/{asin}"
