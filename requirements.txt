@@ -3,4 +3,4 @@ uvicorn[standard]
 requests
 beautifulsoup4
 lxml
-playwright
+playwright==1.47.0
